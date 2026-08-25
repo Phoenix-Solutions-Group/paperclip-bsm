@@ -1159,6 +1159,19 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "merged pull-request confirmation sweep failed");
         }));
     };
+    const scheduleStaleInteractionSweep = () => {
+      if (heartbeatSchedulerStopped) return;
+      trackHeartbeatSchedulerWork(mergedPullRequestConfirmations
+        .escalateStalePending(new Date())
+        .then((result) => {
+          if (result.escalated > 0) {
+            logger.warn(result, "stale pending interactions escalated for board visibility");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "stale interaction escalation sweep failed");
+        }));
+    };
     // Emit a periodic signal when the reaper inspects candidates but archives
     // none, so an inert reaper that skips every candidate is never fully silent.
     // The throttle keeps the 30s cadence from flooding the log.
@@ -1419,6 +1432,7 @@ export async function startServer(): Promise<StartedServer> {
       return { archived, ...notifications };
     };
     await runRetentionSweep();
+    scheduleStaleInteractionSweep();
 
     startHeartbeatSchedulerInterval(() => {
       // Track the outer async callback as well as the work it starts. Shutdown
@@ -1458,6 +1472,7 @@ export async function startServer(): Promise<StartedServer> {
 
         if (heartbeatSchedulerStopped) return;
         scheduleMergedPullRequestConfirmationSweep();
+        scheduleStaleInteractionSweep();
         scheduleTerminalWorkspaceSweep();
         scheduleAdapterLoginReaperSweep();
         scheduleSetupTokenReaperSweep();

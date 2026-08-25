@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   agents,
@@ -9,6 +9,7 @@ import {
   heartbeatRuns,
   issueComments,
   issueDocuments,
+  issueRelations,
   issueThreadInteractions,
   issues,
   toolActionRequests,
@@ -84,6 +85,9 @@ import {
   type GitHubPullRequestReference,
   type PullRequestMergeState,
 } from "./github-pull-request-merge.js";
+
+/** Pending cards are escalated after seven full days without a response. */
+export const STALE_INTERACTION_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 export { extractGitHubPullRequestReferences } from "./github-pull-request-merge.js";
 export type { GitHubPullRequestReference } from "./github-pull-request-merge.js";
@@ -1977,6 +1981,86 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       }
 
       return { checked: rows.length, candidates: eligible.length, accepted, woken };
+    },
+    listStalePendingForCompany: async (companyId: string, at = now()) => {
+      const cutoff = new Date(at.getTime() - STALE_INTERACTION_THRESHOLD_MS);
+      const rows = await db
+        .select({
+          interaction: issueThreadInteractions,
+          issueId: issues.id,
+          issueIdentifier: issues.identifier,
+          issueTitle: issues.title,
+          issueStatus: issues.status,
+        })
+        .from(issueThreadInteractions)
+        .innerJoin(issues, eq(issueThreadInteractions.issueId, issues.id))
+        .where(and(
+          eq(issueThreadInteractions.companyId, companyId),
+          eq(issues.companyId, companyId),
+          eq(issueThreadInteractions.status, "pending"),
+          lte(issueThreadInteractions.createdAt, cutoff),
+        ))
+        .orderBy(asc(issueThreadInteractions.createdAt), asc(issueThreadInteractions.id));
+
+      const issueIds = [...new Set(rows.map((row) => row.issueId))];
+      const blockerRows = issueIds.length === 0
+        ? []
+        : await db
+          .select({
+            blockedIssueId: issueRelations.relatedIssueId,
+            id: issues.id,
+            identifier: issues.identifier,
+            title: issues.title,
+            status: issues.status,
+          })
+          .from(issueRelations)
+          .innerJoin(issues, eq(issueRelations.issueId, issues.id))
+          .where(and(
+            eq(issueRelations.companyId, companyId),
+            eq(issues.companyId, companyId),
+            eq(issueRelations.type, "blocks"),
+            inArray(issueRelations.relatedIssueId, issueIds),
+          ));
+      const blockersByIssueId = new Map<string, typeof blockerRows>();
+      for (const blocker of blockerRows) {
+        const current = blockersByIssueId.get(blocker.blockedIssueId) ?? [];
+        current.push(blocker);
+        blockersByIssueId.set(blocker.blockedIssueId, current);
+      }
+
+      return rows.map((row) => {
+        const ageMs = Math.max(0, at.getTime() - row.interaction.createdAt.getTime());
+        return {
+          interaction: hydrateInteraction(row.interaction),
+          ageMs,
+          ageDays: Math.floor(ageMs / (24 * 60 * 60 * 1000)),
+          issue: {
+            id: row.issueId,
+            identifier: row.issueIdentifier,
+            title: row.issueTitle,
+            status: row.issueStatus,
+            blockedBy: (blockersByIssueId.get(row.issueId) ?? []).map((blocker) => ({
+              id: blocker.id,
+              identifier: blocker.identifier,
+              title: blocker.title,
+              status: blocker.status,
+            })),
+          },
+        };
+      });
+    },
+    escalateStalePending: async (at = now()) => {
+      const cutoff = new Date(at.getTime() - STALE_INTERACTION_THRESHOLD_MS);
+      const escalated = await db
+        .update(issueThreadInteractions)
+        .set({ escalatedAt: at })
+        .where(and(
+          eq(issueThreadInteractions.status, "pending"),
+          isNull(issueThreadInteractions.escalatedAt),
+          lte(issueThreadInteractions.createdAt, cutoff),
+        ))
+        .returning({ id: issueThreadInteractions.id });
+      return { escalated: escalated.length, interactionIds: escalated.map((row) => row.id) };
     },
     listForIssue: async (issueId: string) => {
       const [rows, issueStatus] = await Promise.all([

@@ -11206,6 +11206,14 @@ export function issueRoutes(
     res.json(await runRedactions.redactForIssue(issue.companyId, issue.id, comments));
   });
 
+  router.get("/companies/:companyId/interactions/stale", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const interactions = await issueThreadInteractionService(db)
+      .listStalePendingForCompany(companyId);
+    res.json(interactions);
+  });
+
   router.get("/issues/:id/interactions", async (req, res) => {
     const id = req.params.id as string;
     const issue = await getAccessibleResource(req, res, getIssueById(req, id), "Issue not found");

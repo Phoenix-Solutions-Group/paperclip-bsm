@@ -4722,6 +4722,17 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/api/companies/{companyId}/interactions/stale",
+  tags: ["issues"],
+  summary: "List stale pending issue interactions",
+  description:
+    "Returns pending interaction cards at least seven days old, oldest first, with age, issue status, blockers, creator, escalation timestamp, and resolver policy.",
+  request: { params: z.object({ companyId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/api/issues/{id}/interactions",
   tags: ["issues"],
   summary: "List issue thread interactions",

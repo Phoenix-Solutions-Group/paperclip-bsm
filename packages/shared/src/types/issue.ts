@@ -1364,6 +1364,8 @@ export interface IssueThreadInteractionBase extends IssueThreadInteractionActorF
   createdAt: Date | string;
   updatedAt: Date | string;
   resolvedAt?: Date | string | null;
+  /** Set once a pending interaction has exceeded the documented stale threshold. */
+  escalatedAt?: Date | string | null;
 }
 
 export interface SuggestTasksInteraction extends IssueThreadInteractionBase {

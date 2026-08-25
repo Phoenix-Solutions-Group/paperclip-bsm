@@ -3980,6 +3980,10 @@ export function issueRoutes(
     return decision !== true && decision.reason === "allow_direct_parent_report";
   }
 
+  function isManagerDirectReportCommentDecision(decision: true | Awaited<ReturnType<typeof decideIssueAccess>>) {
+    return decision !== true && decision.reason === "allow_manager_direct_report_comment";
+  }
+
   function isDefaultOpenIssueWriteDecision(decision: true | Awaited<ReturnType<typeof decideIssueAccess>>) {
     return decision !== true && decision.reason === "allow_visible_issue_write";
   }
@@ -12164,6 +12168,7 @@ export function issueRoutes(
     const crossIssueCommentOnlyGrant =
       isClosed &&
       (isDirectParentReportDecision(commentAccessDecision) ||
+        isManagerDirectReportCommentDecision(commentAccessDecision) ||
         (req.actor.type === "agent" &&
           issue.assigneeAgentId !== null &&
           issue.assigneeAgentId !== req.actor.agentId &&

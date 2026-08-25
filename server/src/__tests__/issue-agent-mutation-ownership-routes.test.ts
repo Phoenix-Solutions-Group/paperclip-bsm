@@ -896,6 +896,44 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
+  it("allows a manager comment on a direct report's closed issue without reopening it", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "done", assigneeAgentId: ownerAgentId }));
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
+      allowed: input.action === "issue:comment",
+      action: input.action,
+      reason: input.action === "issue:comment"
+        ? "allow_manager_direct_report_comment"
+        : "deny_low_trust_boundary",
+      explanation: "Managers may comment only on direct reports' issues.",
+    }));
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Approved." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalled();
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("does not turn manager direct-report comment access into issue mutation access", async () => {
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
+      allowed: input.action === "issue:comment",
+      action: input.action,
+      reason: input.action === "issue:comment"
+        ? "allow_manager_direct_report_comment"
+        : "deny_low_trust_boundary",
+      explanation: "Managers may comment only on direct reports' issues.",
+    }));
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Manager edit denied" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
   it("rejects peer agents from listing comments when issue read is outside their boundary", async () => {
     mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
       allowed: false,

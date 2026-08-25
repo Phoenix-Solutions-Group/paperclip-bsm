@@ -107,6 +107,7 @@ export type AuthorizationDecision = {
     | "allow_consented_change"
     | "allow_legacy_agent_creator"
     | "allow_issue_mention_grant"
+    | "allow_manager_direct_report_comment"
     | "allow_direct_parent_report"
     | "allow_visible_issue_write"
     | "allow_self"
@@ -1299,6 +1300,18 @@ export function authorizationService(db: Db) {
     return isAgentInSubtree(db, companyId, managerAgentId, assigneeAgentId);
   }
 
+  async function isDirectManagerOf(companyId: string, managerAgentId: string, assigneeAgentId: string) {
+    return db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(
+        eq(agents.id, assigneeAgentId),
+        eq(agents.companyId, companyId),
+        eq(agents.reportsTo, managerAgentId),
+      ))
+      .then((rows) => rows.length > 0);
+  }
+
   function commentAuthorCanGrantIssueMention(input: {
     mentionedAgentId: string;
     issueAssigneeAgentId: string | null;
@@ -1873,6 +1886,19 @@ export function authorizationService(db: Db) {
       companyId,
       resource: input.resource,
     });
+    const managerDirectReportComment =
+      input.action === "issue:comment" &&
+      input.resource.type === "issue" &&
+      Boolean(input.resource.assigneeAgentId) &&
+      trustResolution.kind !== "denied" &&
+      await isDirectManagerOf(companyId, actorAgentId, input.resource.assigneeAgentId!);
+    if (managerDirectReportComment) {
+      return allow({
+        action: input.action,
+        reason: "allow_manager_direct_report_comment",
+        explanation: "Allowed because the issue is assigned to the manager's direct report.",
+      });
+    }
     const directParentReportTarget =
       input.action === "issue:comment" &&
       await isDirectParentReportTarget({

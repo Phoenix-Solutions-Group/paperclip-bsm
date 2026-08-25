@@ -666,6 +666,53 @@ describeEmbeddedPostgres("authorization service", () => {
     }
   });
 
+  it("allows managers to comment only on direct reports' otherwise-hidden issues", async () => {
+    const company = await createCompany(db, "ManagerDirectReportComment");
+    const visibleProject = await createProject(db, company.id, "ManagerVisible");
+    const hiddenProject = await createProject(db, company.id, "ManagerHidden");
+    const manager = await createAgent(db, company.id, {
+      permissions: {
+        trustPreset: LOW_TRUST_REVIEW_PRESET,
+        authorizationPolicy: {
+          trustBoundary: { mode: LOW_TRUST_REVIEW_PRESET, projectIds: [visibleProject.id] },
+        },
+      },
+    });
+    const report = await createAgent(db, company.id, { reportsTo: manager.id });
+    const unrelated = await createAgent(db, company.id);
+    const authorization = authorizationService(db);
+    const actor = {
+      type: "agent" as const,
+      agentId: manager.id,
+      companyId: company.id,
+      source: "agent_key" as const,
+    };
+    const resource = (assigneeAgentId: string) => ({
+      type: "issue" as const,
+      companyId: company.id,
+      issueId: randomUUID(),
+      projectId: hiddenProject.id,
+      assigneeAgentId,
+      status: "todo",
+    });
+
+    await expect(authorization.decide({
+      actor,
+      action: "issue:comment",
+      resource: resource(report.id),
+    })).resolves.toMatchObject({ allowed: true, reason: "allow_manager_direct_report_comment" });
+    await expect(authorization.decide({
+      actor,
+      action: "issue:mutate",
+      resource: resource(report.id),
+    })).resolves.toMatchObject({ allowed: false, reason: "deny_low_trust_boundary" });
+    await expect(authorization.decide({
+      actor,
+      action: "issue:comment",
+      resource: resource(unrelated.id),
+    })).resolves.toMatchObject({ allowed: false, reason: "deny_low_trust_boundary" });
+  });
+
   it("does not let default-open non-assignee comments mint mention grants", async () => {
     const company = await createCompany(db, "DefaultOpenMentionNonTransitive");
     const ownerAgent = await createAgent(db, company.id);

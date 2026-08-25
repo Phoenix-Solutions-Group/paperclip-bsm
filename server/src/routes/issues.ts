@@ -7555,10 +7555,8 @@ export function issueRoutes(
     const id = req.params.id as string;
     const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
     if (!issue) return;
-    if (req.actor.type !== "board") {
-      res.status(403).json({ error: "Board authentication required" });
-      return;
-    }
+    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (!(await assertDeliverableMutationAllowedByRunContext(req, res, issue))) return;
     const keyParsed = issueDocumentKeySchema.safeParse(String(req.params.key ?? "").trim().toLowerCase());
     if (!keyParsed.success) {
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });
@@ -7600,10 +7598,8 @@ export function issueRoutes(
     const id = req.params.id as string;
     const issue = await getAccessibleResource(req, res, svc.getById(id), "Issue not found");
     if (!issue) return;
-    if (req.actor.type !== "board") {
-      res.status(403).json({ error: "Board authentication required" });
-      return;
-    }
+    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    if (!(await assertDeliverableMutationAllowedByRunContext(req, res, issue))) return;
     const keyParsed = issueDocumentKeySchema.safeParse(String(req.params.key ?? "").trim().toLowerCase());
     if (!keyParsed.success) {
       res.status(400).json({ error: "Invalid document key", details: keyParsed.error.issues });

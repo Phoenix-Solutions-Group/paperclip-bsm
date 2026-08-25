@@ -60,6 +60,8 @@ const mockProjectService = vi.hoisted(() => ({
 }));
 
 const mockDocumentService = vi.hoisted(() => ({
+  lockIssueDocument: vi.fn(),
+  unlockIssueDocument: vi.fn(),
   upsertIssueDocument: vi.fn(),
 }));
 
@@ -684,6 +686,14 @@ describe("agent issue mutation checkout ownership", () => {
         format: "markdown",
         latestRevisionNumber: 2,
       },
+    });
+    mockDocumentService.lockIssueDocument.mockResolvedValue({
+      changed: true,
+      document: { id: "document-1", key: "plan", title: "Plan", lockedAt: new Date() },
+    });
+    mockDocumentService.unlockIssueDocument.mockResolvedValue({
+      changed: true,
+      document: { id: "document-1", key: "plan", title: "Plan" },
     });
     mockWorkProductService.createForIssue.mockResolvedValue({
       id: "product-2",
@@ -2441,4 +2451,37 @@ describe("agent issue mutation checkout ownership", () => {
       expect(mockIssueService.update).not.toHaveBeenCalled();
     });
   });
+
+  it.each([
+    ["owner", ownerActor(), 200],
+    ["owner without run", { type: "agent", agentId: ownerAgentId, companyId, source: "agent_key" }, 401],
+    ["peer", peerActor(), 409],
+    ["board", boardActor(), 200],
+  ])("authorizes document lock and unlock for %s", async (_name, actor, expectedStatus) => {
+    const app = await createApp(actor);
+
+    for (const action of ["lock", "unlock"]) {
+      const res = await request(app).post(`/api/issues/${issueId}/documents/plan/${action}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(expectedStatus);
+      if (expectedStatus === 401) expect(res.body.error).toBe("Agent run id required");
+      if (expectedStatus === 409) expect(res.body.details.code).toBe("issue_write_assignee_run_lock");
+    }
+
+    if (expectedStatus === 200) {
+      expect(mockDocumentService.lockIssueDocument).toHaveBeenCalled();
+      expect(mockDocumentService.unlockIssueDocument).toHaveBeenCalled();
+    } else {
+      expect(mockDocumentService.lockIssueDocument).not.toHaveBeenCalled();
+      expect(mockDocumentService.unlockIssueDocument).not.toHaveBeenCalled();
+    }
+    if (_name === "owner") {
+      expect(mockIssueService.assertCheckoutOwner).toHaveBeenCalledWith(issueId, ownerAgentId, ownerRunId);
+      expect(mockDocumentService.lockIssueDocument).toHaveBeenCalledWith(expect.objectContaining({
+        issueId,
+        key: "plan",
+        lockedByAgentId: ownerAgentId,
+      }));
+    }
+  });
+
 });

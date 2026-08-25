@@ -4061,6 +4061,22 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         ),
       );
 
+    const candidateIdsByCompany = new Map<string, string[]>();
+    for (const candidate of candidates) {
+      const companyIssueIds = candidateIdsByCompany.get(candidate.companyId) ?? [];
+      companyIssueIds.push(candidate.id);
+      candidateIdsByCompany.set(candidate.companyId, companyIssueIds);
+    }
+    const dependencyReadinessByIssueId = new Map<string, { isDependencyReady: boolean }>();
+    await Promise.all(
+      [...candidateIdsByCompany].map(async ([companyId, issueIds]) => {
+        const readinessByIssueId = await issuesSvc.listDependencyReadiness(companyId, issueIds);
+        for (const [issueId, readiness] of readinessByIssueId) {
+          dependencyReadinessByIssueId.set(issueId, readiness);
+        }
+      }),
+    );
+
     const result = {
       assignmentDispatched: 0,
       dispatchRequeued: 0,
@@ -4076,6 +4092,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       providerQuotaMonitored: 0,
       recentProgressExempted: 0,
       operatorCancelExempted: 0,
+      dependencyBlockedSkipped: 0,
       skipped: 0,
       issueIds: [] as string[],
     };
@@ -4094,6 +4111,17 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         : issue.assigneeAgentId;
       if (!agentId) {
         result.skipped += 1;
+        continue;
+      }
+
+      // Dependency changes are event-driven. A blocked issue must stay idle until
+      // its final blocker resolves (or an operator explicitly changes the
+      // relation). Without this guard, the stranded-work reconciler repeatedly
+      // re-enqueues the issue and heartbeat.wakeup records a fresh
+      // issue_dependencies_blocked skip on every reconciliation pass.
+      const dependencyReadiness = dependencyReadinessByIssueId.get(issue.id) ?? null;
+      if (dependencyReadiness && !dependencyReadiness.isDependencyReady) {
+        result.dependencyBlockedSkipped += 1;
         continue;
       }
 

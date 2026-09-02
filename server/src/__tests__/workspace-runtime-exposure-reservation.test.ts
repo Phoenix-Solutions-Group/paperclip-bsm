@@ -27,6 +27,7 @@
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -62,6 +63,15 @@ const NEXT_APP_PORT = 42_502;
 const NEXT_HMR_PORT = 52_502;
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
+
+const loopbackListenersSupported = await new Promise<boolean>((resolve) => {
+  const probe = net.createServer();
+  probe.unref();
+  probe.once("error", () => resolve(false));
+  probe.listen(0, "127.0.0.1", () => {
+    probe.close(() => resolve(true));
+  });
+});
 
 /**
  * A synthetic host on which only the two dedicated pairs above are usable.
@@ -149,7 +159,7 @@ const GUEST_COMMAND =
   + "for(const q of [p,p+10000])http.createServer((_,r)=>{r.statusCode=200;r.end('ok')}).listen(q,'127.0.0.1');"
   + "setInterval(()=>{},1000)\"";
 
-(embeddedPostgresSupport.supported ? describe : describe.skip)(
+(embeddedPostgresSupport.supported && loopbackListenersSupported ? describe : describe.skip)(
   "PAP-17419 leased exposure pair reservation",
   () => {
     let db: Db;

@@ -20,7 +20,9 @@ permissions:
   id-token: write   # cosign keyless OIDC
 
 env:
-  REGISTRY: ghcr.io/paperclipai
+  # GITHUB_TOKEN is scoped to packages owned by this repository's organization.
+  # Keep the registry owner lowercase because GHCR/Docker image names require it.
+  REGISTRY: ghcr.io/phoenix-solutions-group
   VERSION: ${{ github.event.inputs.version || format('git-{0}', github.sha) }}
 
 jobs:

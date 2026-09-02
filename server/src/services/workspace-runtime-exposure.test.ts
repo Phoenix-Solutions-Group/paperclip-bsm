@@ -264,6 +264,19 @@ async function isLoopbackPortFree(port: number): Promise<boolean> {
   });
 }
 
+async function supportsLoopbackListeners(): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", () => resolve(false));
+    probe.listen(0, "127.0.0.1", () => {
+      probe.close(() => resolve(true));
+    });
+  });
+}
+
+const describeWithLoopbackListeners = await supportsLoopbackListeners() ? describe : describe.skip;
+
 /**
  * The first app port at or above `startAt` whose HMR companion is also free on
  * the real host, mirroring the allocator's own scan. The pinned-port test needs
@@ -364,7 +377,7 @@ function startInput(options?: {
   };
 }
 
-describe("workspace runtime tailscale_https lifecycle", () => {
+describeWithLoopbackListeners("workspace runtime tailscale_https lifecycle", () => {
   it("reserves before spawn, exposes after backend readiness, and removes on stop", async () => {
     const { broker, calls } = createBroker();
     installDeps({ broker });
@@ -391,7 +404,7 @@ describe("workspace runtime tailscale_https lifecycle", () => {
   }, 15_000);
 });
 
-describe("automatic tailscale_https default for managed worktree runtimes", () => {
+describeWithLoopbackListeners("automatic tailscale_https default for managed worktree runtimes", () => {
   it("defaults a legacy paperclip-dev service with no exposure block, relocating its pinned port", async () => {
     const { broker, calls } = createBroker();
     installDeps({ broker });
@@ -574,7 +587,7 @@ describe("automatic tailscale_https default for managed worktree runtimes", () =
  * checkout it launched bound `0.0.0.0`, and the server only asked for loopback
  * via env vars that checkout never read.
  */
-describe("loopback bind is forced on the guest, not merely requested (PAP-17256)", () => {
+describeWithLoopbackListeners("loopback bind is forced on the guest, not merely requested (PAP-17256)", () => {
   it("starts a fresh service-index-0 lane whose guest only honours argv", async () => {
     const { broker, calls } = createBroker();
     installDeps({ broker });
@@ -697,7 +710,7 @@ describe("loopback bind is forced on the guest, not merely requested (PAP-17256)
   }, 20_000);
 });
 
-describe("readiness probes loopback for an exposed runtime (PAP-17256)", () => {
+describeWithLoopbackListeners("readiness probes loopback for an exposed runtime (PAP-17256)", () => {
   it("starts even when the only readiness target is the MagicDNS display URL", async () => {
     // The live project config declares a loopback readiness URL, but when it does
     // not, readiness falls back to `expose.urlTemplate` — a MagicDNS name that
@@ -724,7 +737,7 @@ describe("readiness probes loopback for an exposed runtime (PAP-17256)", () => {
   }, 20_000);
 });
 
-describe("the deployed failure shape: loopback app port, wildcard HMR (PAP-17256)", () => {
+describeWithLoopbackListeners("the deployed failure shape: loopback app port, wildcard HMR (PAP-17256)", () => {
   it("fails terminally naming the HMR port, because forcing the bind cannot reach Vite's own listener", async () => {
     // Plain master's app.ts passes Vite `hmr.port` without `hmr.server` or
     // `server.host`, so the HMR websocket binds `::` no matter what the bind mode
@@ -749,7 +762,7 @@ describe("the deployed failure shape: loopback app port, wildcard HMR (PAP-17256
   }, 20_000);
 });
 
-describe("recovers when a guest loses its assigned exposure port during startup (PAP-17256)", () => {
+describeWithLoopbackListeners("recovers when a guest loses its assigned exposure port during startup (PAP-17256)", () => {
   // The quarantine decision itself is unit-tested through
   // `classifyExposureHostCollisions` below. A deterministic end-to-end quarantine
   // test is not reachable here: a real host listener that holds the assigned port

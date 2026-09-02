@@ -1,0 +1,1 @@
+ALTER TABLE "issue_thread_interactions" ADD COLUMN "escalated_at" timestamp with time zone;

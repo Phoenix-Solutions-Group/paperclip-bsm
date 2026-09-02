@@ -158,6 +158,10 @@ async function waitForPidExit(pid: number, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isPidAlive(pid)) return true;
+    if (process.platform === "linux") {
+      const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => null);
+      if (stat?.slice(stat.lastIndexOf(")") + 2).startsWith("Z")) return true;
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return !isPidAlive(pid);
@@ -4207,7 +4211,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     ).toBe(true);
   });
 
-  it("converts a continuation parked for review into a dependency wait on its existing blockers", async () => {
+  it("recognizes existing blockers as the durable dependency wait", async () => {
     const { companyId, agentId, issueId } = await seedStrandedIssueFixture({
       status: "in_progress",
       runStatus: "cancelled",
@@ -4247,17 +4251,19 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const heartbeat = heartbeatService(db);
     const result = await heartbeat.reconcileStrandedAssignedIssues();
 
-    expect(result.waitingOnReviewResolved).toBe(1);
+    expect(result.waitingOnReviewResolved).toBe(0);
+    expect(result.dependencyBlockedSkipped).toBe(1);
     expect(result.escalated).toBe(0);
-    expect(result.issueIds).toEqual([issueId]);
+    expect(result.issueIds).toEqual([]);
 
     const blocked = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
-    expect(blocked?.status).toBe("blocked");
+    expect(blocked?.status).toBe("in_progress");
     expect(blocked?.assigneeAgentId).toBe(agentId);
 
-    // Only the still-open blocker is carried over; the resolved one is excluded.
+    // Existing dependency edges are preserved; reconciliation only classifies
+    // whether at least one unresolved blocker provides a durable wait path.
     const blockers = await sourceBlockerIssueIds(companyId, issueId);
-    expect(blockers).toEqual([openBlockerId]);
+    expect(new Set(blockers)).toEqual(new Set([openBlockerId, doneBlockerId]));
 
     const recoveryIssues = await db
       .select()
@@ -4266,15 +4272,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(recoveryIssues).toHaveLength(0);
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
-    expect(comments).toHaveLength(1);
-    expect(comments[0]?.authorType).toBe("system");
-    expect(comments[0]?.body).toContain("This task is waiting on");
-    expect(comments[0]?.body).toContain("continue automatically");
-    // The blocker's real identifier is linked — not the "another open issue" fallback.
-    expect(comments[0]?.body).toContain(`${issuePrefix}-20`);
-    expect(comments[0]?.body).not.toContain("another open issue");
-    expect(comments[0]?.body).not.toContain(`${issuePrefix}-21`);
-    expect(comments[0]?.body).not.toContain("issue_continuation_waiting_on_review");
+    expect(comments).toHaveLength(0);
   });
 
   it("repairs the PAP-16986 deliberate wait through the original owner when no target exists", async () => {
@@ -7623,7 +7621,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const result = await heartbeat.reconcileStrandedAssignedIssues();
     expect(result.continuationRequeued).toBe(0);
     expect(result.escalated).toBe(0);
-    expect(result.skipped).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.dependencyBlockedSkipped).toBe(1);
 
     const source = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
     expect(source?.status).toBe("in_progress");

@@ -306,6 +306,50 @@ describeEmbeddedPostgres("issue blocker attention", () => {
     expect(parent?.blockerAttention?.sampleBlockerIdentifier).not.toBe("PBD-4");
   });
 
+  it("derives blocker summaries only from recorded dependency relations", async () => {
+    const { companyId, agentId } = await createCompany("PBG");
+    const rootId = await insertIssue({ companyId, identifier: "PBG-1", title: "Release", status: "blocked" });
+    const directId = await insertIssue({
+      companyId,
+      identifier: "PBG-2",
+      title: "Recorded blocker",
+      status: "todo",
+      assigneeAgentId: agentId,
+    });
+    const unrelatedChildId = await insertIssue({
+      companyId,
+      identifier: "PBG-3",
+      title: "Open child without dependency relation",
+      status: "todo",
+      parentId: rootId,
+      assigneeAgentId: agentId,
+    });
+    const staleCancelledChildId = await insertIssue({
+      companyId,
+      identifier: "PBG-4",
+      title: "Cancelled child without dependency relation",
+      status: "cancelled",
+      parentId: rootId,
+      assigneeAgentId: agentId,
+    });
+    await block({ companyId, blockerIssueId: directId, blockedIssueId: rootId });
+    await activeRun({ companyId, agentId, issueId: directId });
+
+    const root = (await svc.list(companyId, { status: "blocked" })).find((issue) => issue.id === rootId);
+
+    expect(root?.blockerAttention).toMatchObject({
+      state: "covered",
+      reason: "active_dependency",
+      unresolvedBlockerCount: 1,
+      coveredBlockerCount: 1,
+      attentionBlockerCount: 0,
+      directBlockerIssueId: directId,
+      sampleBlockerIdentifier: "PBG-2",
+    });
+    expect(root?.blockerAttention?.directBlockerIssueId).not.toBe(unrelatedChildId);
+    expect(root?.blockerAttention?.terminalBlockerIssueId).not.toBe(staleCancelledChildId);
+  });
+
   it("covers recursive blocker chains when the downstream leaf has active work", async () => {
     const { companyId, agentId } = await createCompany("PBR");
     const parentId = await insertIssue({ companyId, identifier: "PBR-1", title: "Parent", status: "blocked" });

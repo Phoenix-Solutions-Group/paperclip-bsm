@@ -1879,7 +1879,6 @@ const BLOCKER_ATTENTION_ACTIVE_WAKE_STATUSES = ["queued", "deferred_issue_execut
 const BLOCKER_ATTENTION_PENDING_INTERACTION_STATUSES = ["pending"];
 const BLOCKER_ATTENTION_PENDING_APPROVAL_STATUSES = ["pending", "revision_requested"];
 const BLOCKER_ATTENTION_OPEN_RECOVERY_ORIGIN_KIND = "harness_liveness_escalation";
-const BLOCKER_ATTENTION_CHILD_TERMINAL_STATUSES = ["done", "cancelled"];
 const PRODUCTIVITY_REVIEW_ORIGIN_KIND = "issue_productivity_review";
 const PRODUCTIVITY_REVIEW_TERMINAL_STATUSES = ["done", "cancelled"];
 const PRODUCTIVITY_REVIEW_ACTIVITY_ACTIONS = [
@@ -2387,32 +2386,7 @@ async function listIssueBlockerAttentionMap(
             eq(issues.companyId, companyId),
           ),
         );
-      const childRowsPromise: Promise<IssueBlockerAttentionQueryRow[]> = dbOrTx
-        .select({
-          issueId: issues.parentId,
-          blockerIssueId: issues.id,
-          id: issues.id,
-          companyId: issues.companyId,
-          parentId: issues.parentId,
-          identifier: issues.identifier,
-          title: issues.title,
-          status: issues.status,
-          executionRunId: issues.executionRunId,
-          assigneeAgentId: issues.assigneeAgentId,
-          assigneeUserId: issues.assigneeUserId,
-        })
-        .from(issues)
-        .where(
-          and(
-            eq(issues.companyId, companyId),
-            inArray(issues.parentId, chunk),
-            notInArray(issues.status, BLOCKER_ATTENTION_CHILD_TERMINAL_STATUSES),
-          ),
-        );
-      const [explicitBlockerRows, childRows] = await Promise.all([
-        explicitBlockerRowsPromise,
-        childRowsPromise,
-      ]);
+      const explicitBlockerRows = await explicitBlockerRowsPromise;
 
       const unresolvedExplicitBlockerRows = explicitBlockerRows.filter(
         (row) => row.status !== "done" || pendingFinalizeBlockerIssueIds.has(row.blockerIssueId),
@@ -2421,12 +2395,12 @@ async function listIssueBlockerAttentionMap(
         ...unresolvedExplicitBlockerRows
           .filter((row): row is IssueBlockerAttentionQueryRow & { issueId: string } => row.issueId !== null)
           .map((row) => ({ issueId: row.issueId, blockerIssueId: row.blockerIssueId })),
-        ...childRows
-          .filter((row): row is IssueBlockerAttentionQueryRow & { issueId: string } => row.issueId !== null)
-          .map((row) => ({ issueId: row.issueId, blockerIssueId: row.blockerIssueId })),
       ]);
 
-      for (const row of [...unresolvedExplicitBlockerRows, ...childRows]) {
+      // Parent/child structure is ownership hierarchy, not a dependency edge.
+      // Only recorded `blocks` relations may enter blocker summaries; otherwise
+      // unrelated open children inflate counts and can be reported as blockers.
+      for (const row of unresolvedExplicitBlockerRows) {
         if (!row.issueId || nodesById.has(row.blockerIssueId)) continue;
         nodesById.set(row.blockerIssueId, {
           id: row.blockerIssueId,

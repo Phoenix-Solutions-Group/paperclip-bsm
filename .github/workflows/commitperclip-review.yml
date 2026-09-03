@@ -33,8 +33,35 @@ jobs:
         with:
           node-version: '24'
 
+      # commitperclip is the upstream review bot; its GitHub App private key is
+      # held by the app owner, so forks of this repository cannot obtain it.
+      # Without the key the token step exits 1 and reports this job as failed on
+      # every single pull request, forever — a red check that no change to the
+      # branch can ever clear, and that hides real failures behind noise.
+      # Report the absent credential as an explicit skip instead. The steps that
+      # protect the repository regardless of the bot — Dependency Review above —
+      # stay unconditional and still fail the job.
+      - name: Check for commitperclip credential
+        id: credential
+        env:
+          COMMITPERCLIP_KEY: ${{ secrets.COMMITPERCLIP_KEY }}
+        run: |
+          if [ -n "$COMMITPERCLIP_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=commitperclip review skipped::COMMITPERCLIP_KEY is not configured for this repository, so the commitperclip bot review did not run. Dependency Review still ran and still gates this job."
+            {
+              echo "### commitperclip review skipped"
+              echo
+              echo "\`COMMITPERCLIP_KEY\` is not configured for this repository, so the bot review did not run."
+              echo "Dependency Review still ran and still gates this job."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Generate commitperclip token
         id: token
+        if: steps.credential.outputs.present == 'true'
         run: |
           TOKEN=$(node .github/scripts/get-bot-token.mjs)
           echo "::add-mask::$TOKEN"
@@ -44,7 +71,9 @@ jobs:
 
       - name: Run quality gates
         id: quality
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: >-
+          steps.credential.outputs.present == 'true' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         run: node .github/scripts/run-quality-gates.mjs
         continue-on-error: true
         env:
@@ -56,6 +85,7 @@ jobs:
 
       - name: Fail if quality gates failed
         if: >-
+          steps.credential.outputs.present == 'true' &&
           github.event.pull_request.user.login != 'dependabot[bot]' &&
           steps.quality.outcome == 'failure'
         run: |

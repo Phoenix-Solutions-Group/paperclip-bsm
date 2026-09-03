@@ -349,6 +349,106 @@ describeEmbeddedPostgres("stale issue execution lock routes", () => {
     expect(res.body?.error).toBe("Issue run ownership conflict");
   });
 
+  it("hides the holding run from actors who cannot read the issue, but not from the assignee", async () => {
+    const { companyId, agentId, failedRunId } = await seedCompanyAgentAndRuns();
+    const liveOwnerRunId = randomUUID();
+    const issueId = randomUUID();
+    const lockedAt = new Date();
+    await db.insert(heartbeatRuns).values({
+      id: liveOwnerRunId,
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "manual",
+      startedAt: new Date(),
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Live checkout lock",
+      status: "in_progress",
+      priority: "high",
+      assigneeAgentId: agentId,
+      checkoutRunId: liveOwnerRunId,
+      executionRunId: liveOwnerRunId,
+      executionAgentNameKey: "codexcoder",
+      executionLockedAt: lockedAt,
+    });
+
+    // An outsider must not learn who holds the lock, when it was claimed, or even
+    // that the issue exists. The lock conflict payload names the holding run, so
+    // the read gate has to reject before the conflict is ever produced.
+    const outsiderCompanyId = randomUUID();
+    const outsiderAgentId = randomUUID();
+    const outsiderRunId = randomUUID();
+    await db.insert(companies).values({
+      id: outsiderCompanyId,
+      name: "Outsider",
+      issuePrefix: `T${outsiderCompanyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: outsiderAgentId,
+      companyId: outsiderCompanyId,
+      name: "OutsiderCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(heartbeatRuns).values({
+      id: outsiderRunId,
+      companyId: outsiderCompanyId,
+      agentId: outsiderAgentId,
+      status: "running",
+      invocationSource: "manual",
+      startedAt: new Date(),
+    });
+
+    const unauthorizedActors = [
+      agentActor(outsiderCompanyId, outsiderAgentId, outsiderRunId),
+      {
+        type: "board",
+        userId: "outside-user",
+        companyIds: [],
+        memberships: [],
+        isInstanceAdmin: false,
+        source: "session",
+      } as Express.Request["actor"],
+    ];
+
+    for (const actor of unauthorizedActors) {
+      const denied = await request(createApp(actor))
+        .patch(`/api/issues/${issueId}`)
+        .send({ title: "Should not be told why" });
+
+      expect(denied.status, JSON.stringify(denied.body)).toBe(404);
+      expect(denied.body?.error).toBe("Issue not found");
+
+      const leaked = JSON.stringify(denied.body ?? {});
+      for (const secret of [liveOwnerRunId, agentId, lockedAt.toISOString()]) {
+        expect(leaked).not.toContain(secret);
+      }
+      // Identifiers are not the only disclosure. Naming the holder in prose is
+      // the same leak in friendlier words, so the seeded agent's display name
+      // and its execution name key must be absent too.
+      for (const holderName of ["CodexCoder", "codexcoder"]) {
+        expect(leaked.toLowerCase()).not.toContain(holderName.toLowerCase());
+      }
+    }
+
+    // The gate must not over-block: the rightful assignee still gets the real
+    // conflict so it can tell "someone else is working" from "you cannot see this".
+    const allowed = await request(createApp(agentActor(companyId, agentId, failedRunId)))
+      .patch(`/api/issues/${issueId}`)
+      .send({ title: "Should be told why" });
+
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(409);
+    expect(allowed.body?.error).toBe("Issue run ownership conflict");
+  });
+
   it("preserves live checkout ownership on checkout conflicts without retry side effects", async () => {
     const { companyId, agentId, currentRunId } = await seedCompanyAgentAndRuns();
     const contenderRunId = randomUUID();
